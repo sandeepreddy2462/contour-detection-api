@@ -1,0 +1,32 @@
+# Python cache and virtual environments
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+*.egg
+venv/
+.env
+.env.local
+
+# VSCode / PyCharm settings
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Build / Dist
+build/
+dist/
+
+# Render / Deployment
+*.sqlite3
+
+# Ignore models EXCEPT when tracked by LFS
+# (we will use .gitattributes to manage them)
+model/*.pth
