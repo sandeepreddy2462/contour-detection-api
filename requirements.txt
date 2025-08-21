@@ -3,9 +3,14 @@ uvicorn[standard]
 pydantic
 python-multipart
 requests
-torch
-torchvision
+torch==2.5.0
+torchvision==0.20.0
 numpy
 opencv-python
 Pillow
+pycocotools
+matplotlib
+onnxruntime
+onnx
 git+https://github.com/facebookresearch/segment-anything.git
+--extra-index-url https://download.pytorch.org/whl/cu121
