@@ -124,7 +124,7 @@ def _seed_masks_from_saliency(sal, roi_mask, fg_q=0.80, ring_px=8):
 # ---------------------------------------------------------
 # GrabCut with seeds (outside ROI = sure background)
 # ---------------------------------------------------------
-def _grabcut_refine(image_bgr, roi_mask, sure_fg, sure_bg, iters=1):
+def _grabcut_refine(image_bgr, roi_mask, sure_fg, sure_bg, iters=5):
     H, W = roi_mask.shape
     gc_mask = np.full((H,W), cv2.GC_PR_BGD, dtype=np.uint8)
 
@@ -149,7 +149,7 @@ def _grabcut_refine(image_bgr, roi_mask, sure_fg, sure_bg, iters=1):
 # ---------------------------------------------------------
 # Points for SAM: sample positives at saliency peaks, negatives on BG ring
 # ---------------------------------------------------------
-def _points_for_sam(sal, roi_mask, sure_fg, sure_bg, max_pos=20, max_neg=20):
+def _points_for_sam(sal, roi_mask, sure_fg, sure_bg, max_pos=12, max_neg=12):
     # Positive: top-K peaks
     sal_blur = cv2.GaussianBlur(sal, (9,9), 0)
     peaks = (sal_blur == cv2.dilate(sal_blur, np.ones((9,9), np.uint8)))
@@ -232,7 +232,7 @@ def wound_segmentation(image, roi_polygon, debug=False, debug_dir=None):
     gc_mask = _grabcut_refine(img_pp, roi_mask, sure_fg, sure_bg, iters=5)
 
     # Points for SAM
-    pos_pts, neg_pts = _points_for_sam(sal, roi_mask, sure_fg, sure_bg, max_pos=25, max_neg=25)
+    pos_pts, neg_pts = _points_for_sam(sal, roi_mask, sure_fg, sure_bg, max_pos=12, max_neg=12)
     predictor.set_image(img_pp)
     labels = None
     pts = None
