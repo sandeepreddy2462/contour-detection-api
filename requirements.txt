@@ -14,5 +14,4 @@ onnxruntime
 onnx
 git+https://github.com/SysCV/sam-hq.git
 segment-anything-hq
-timm
 --extra-index-url https://download.pytorch.org/whl/cu121
