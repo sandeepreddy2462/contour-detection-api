@@ -2,7 +2,7 @@ import cv2
 import numpy as np
 import torch
 from segment_anything import sam_model_registry, SamPredictor
-
+import random
 
 # -------------------------------
 # 1. Load SAM model
