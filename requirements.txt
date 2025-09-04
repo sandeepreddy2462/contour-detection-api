@@ -12,6 +12,7 @@ pycocotools
 matplotlib
 onnxruntime
 onnx
+timm
 git+https://github.com/SysCV/sam-hq.git
 segment-anything-hq
 --extra-index-url https://download.pytorch.org/whl/cu121
