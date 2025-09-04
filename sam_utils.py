@@ -7,11 +7,15 @@ from segment_anything import sam_model_registry, SamPredictor
 # -------------------------------
 # 1. Load SAM model
 # -------------------------------
-sam_checkpoint = "model\hqsam_finetuned_on_ec2.pth"  # Path to SAM weights
-model_type = "vit_b"
 device = "cuda" if torch.cuda.is_available() else "cpu"
-sam = sam_model_registry[model_type](checkpoint=sam_checkpoint)
-sam.to(device=device)
+model_type = "vit_b"
+sam_checkpoint = "model\hqsam_finetuned_on_ec2.pth"  # Path to SAM weights
+
+# sam_checkpoint = "/content/drive/MyDrive/models/sam_hq_vit_b.pth"
+sam = sam_model_registry[model_type]()
+state_dict = torch.load(sam_checkpoint, map_location=device)
+sam.load_state_dict(state_dict)
+sam.to(device)
 predictor = SamPredictor(sam)
 
 # -------------------------------
