@@ -9,7 +9,7 @@ import random
 # -------------------------------
 device = "cuda" if torch.cuda.is_available() else "cpu"
 model_type = "vit_b"
-sam_checkpoint = "model\hqsam_finetuned_on_ec2.pth"  # Path to SAM weights
+sam_checkpoint = "model/hqsam_finetuned_on_ec2.pth"  # Path to SAM weights
 sam = sam_model_registry[model_type]()
 state_dict = torch.load(sam_checkpoint, map_location=device)
 sam.load_state_dict(state_dict)
