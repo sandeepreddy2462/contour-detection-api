@@ -13,6 +13,8 @@ import io
 from PIL import Image
 import base64
 from sam_utils import wound_segmentation
+from color_utils import analyze_color
+
 from typing import List
 
 # Initialize FastAPI app
@@ -65,11 +67,15 @@ async def counter_detection(
             raise HTTPException(status_code=400,detail="No contour Found")
         final_contour = contour_float.reshape(-1,2).tolist()
 
+        #color analysis 
+        color_result = analyze_color(img, final_mask)
+
         return {
             'statusCode': 200,
             'result':{
                 "contourPx": final_contour,
-                "cropBox" : crop_box_dict
+                "cropBox" : crop_box_dict,
+                "colorComposition": color_result
             } 
         }
         

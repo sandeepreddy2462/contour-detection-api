@@ -16,3 +16,4 @@ timm
 git+https://github.com/SysCV/sam-hq.git
 segment-anything-hq
 --extra-index-url https://download.pytorch.org/whl/cu121
+scikit-image
