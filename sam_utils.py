@@ -3,7 +3,14 @@ import cv2
 import torch
 from segment_anything_hq import sam_model_registry, SamPredictor
 import random
+import time
+from datetime import datetime
+from typing import Optional
+from contextlib import nullcontext
 
+# -------------------------------
+# 1. Load SAM model
+# -------------------------------
 # -------------------------------
 # 1. Load SAM model
 # -------------------------------
@@ -65,7 +72,6 @@ def _wound_saliency(bgr, roi_mask):
     L, a, b = cv2.split(lab)
     hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
     H, S, V = cv2.split(hsv)
-
     roi_inds = roi_mask.astype(bool)
     def nz_norm(x):
         vals = x[roi_inds].astype(np.float32)
@@ -110,7 +116,6 @@ def _seed_masks_from_saliency(sal, roi_mask, min_area=50):
     # Join nearby wound parts
     k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5,5))
     sure_fg = cv2.morphologyEx(cleaned, cv2.MORPH_CLOSE, k, iterations=2)
-
     # Background ring + low-saliency
     ring_px = max(6, min(sal.shape) // 40)
     k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (ring_px, ring_px))
@@ -161,6 +166,7 @@ def _choose_best_mask(masks, image_gray, gc_mask):
 
     return masks[best_idx].astype(np.uint8)
 
+
 # --------------------------------------
 # Main function with CONSENSUS fallback
 # --------------------------------------
@@ -171,6 +177,8 @@ def wound_segmentation(image, roi_polygon, debug=False, debug_dir=None):
     """
     assert image.ndim == 3 and image.shape[2] == 3
     H, W = image.shape[:2]
+    t0 = time.perf_counter()  
+    last_ts = t0
 
     # ROI mask
     roi_poly_np = np.array(roi_polygon, dtype=np.int32)
@@ -184,17 +192,37 @@ def wound_segmentation(image, roi_polygon, debug=False, debug_dir=None):
     # Saliency + seeds
     sal = _wound_saliency(img_pp, roi_mask)
     sure_fg, sure_bg = _seed_masks_from_saliency(sal, roi_mask)
+    # sure_fg, sure_bg = fast_fg_bg_mask(sal, roi_mask)
+
+    t_before_grab_cut = time.perf_counter()
+    print(f"[TIMING] Before grab_cut: {t_before_grab_cut - t0:.3f} seconds")
 
     # GrabCut
-    gc_mask = _grabcut_refine(img_pp, roi_mask, sure_fg, sure_bg, iters=5)
+    # gc_mask = _grabcut_refine(img_pp, roi_mask, sure_fg, sure_bg, iters=3)
+    gc_mask = roi_mask
+    t_after_grab_cut = time.perf_counter()
+    grab_cut_time = t_after_grab_cut - t_before_grab_cut
+    print(f"[TIMING] grab_cut_time: {grab_cut_time:.3f} seconds")
+
     # SAM (box only, deterministic)
+    t_before_set_image = time.perf_counter()
+
     predictor.set_image(img_pp)
+    
+    t_after_set_image = time.perf_counter()
+    set_image_time = t_after_set_image - t_before_set_image
+    print(f"[TIMING] set_image_time: {set_image_time:.3f} seconds")
+    
     rx, ry, rw, rh = cv2.boundingRect(roi_poly_np)
     sam_masks, _, _ = predictor.predict(
         point_coords=None, point_labels=None,
         box=np.array([rx, ry, rx+rw, ry+rh], dtype=np.float32),
         multimask_output=True
     )
+    t_after_predict = time.perf_counter()
+    prediction_time = t_after_predict - t_after_set_image
+    print(f"[TIMING] prediction_time: {prediction_time:.3f} seconds")
+    
     sam_masks = [m.astype(np.uint8) for m in sam_masks]
     sam_union = np.max(np.stack(sam_masks), axis=0).astype(np.uint8)
 
@@ -238,4 +266,10 @@ def wound_segmentation(image, roi_polygon, debug=False, debug_dir=None):
     contours, _ = cv2.findContours(final_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     final_contour = max(contours, key=cv2.contourArea) if contours else None
     
-    return final_mask, final_contour
+    # ---------- Final timestamp ----------
+    t_end = time.perf_counter()
+    total_time = t_end - t0
+    print(f"[TIMING] total_time: {total_time:.3f} seconds")
+
+    return final_mask, final_contour, grab_cut_time, set_image_time, prediction_time, total_time
+
