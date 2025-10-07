@@ -17,11 +17,18 @@ from contextlib import nullcontext
 device = "cuda" if torch.cuda.is_available() else "cpu"
 model_type = "vit_b"
 sam_checkpoint = "model/hqsam_finetuned_on_ec2.pth"  # Path to SAM weights
-sam = sam_model_registry[model_type]()
-state_dict = torch.load(sam_checkpoint, map_location=device)
-sam.load_state_dict(state_dict)
-sam.to(device)
-predictor = SamPredictor(sam)
+
+try:
+    sam = sam_model_registry[model_type]()
+    state_dict = torch.load(sam_checkpoint, map_location=device, weights_only=False)
+    sam.load_state_dict(state_dict)
+    sam.to(device)
+    predictor = SamPredictor(sam)
+    print(f"SAM model loaded successfully on {device}")
+except Exception as e:
+    print(f"Error loading SAM model: {e}")
+    print("Please check if the model file is complete and not corrupted")
+    raise
 
 # ------------------------------
 # Utility: safe I/O + overlays
