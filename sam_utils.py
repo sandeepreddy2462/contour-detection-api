@@ -9,27 +9,24 @@ from typing import Optional
 from contextlib import nullcontext
 
 # -------------------------------
-# 1. Load SAM model
-# -------------------------------
-# -------------------------------
-# 1. Load SAM model
+# 1. Load HQ-SAM model
 # -------------------------------
 device = "cuda" if torch.cuda.is_available() else "cpu"
 model_type = "vit_b"
-sam_checkpoint = "model/hqsam_finetuned_on_ec2.pth"  # Path to SAM weights
+sam_checkpoint = "model/hqsam_finetuned_on_ec2.pth"
 
 try:
-    sam = sam_model_registry[model_type]()
-    state_dict = torch.load(sam_checkpoint, map_location=device, weights_only=False)
-    sam.load_state_dict(state_dict)
+    # ✅ use HQ-SAM registry correctly
+    sam = sam_model_registry[model_type](checkpoint=sam_checkpoint)
     sam.to(device)
     predictor = SamPredictor(sam)
-    print(f"SAM model loaded successfully on {device}")
-except Exception as e:
-    print(f"Error loading SAM model: {e}")
-    print("Please check if the model file is complete and not corrupted")
-    raise
+    print(f"HQ-SAM model loaded successfully on {device}")
 
+except Exception as e:
+    logging.exception("Error loading HQ-SAM model")
+    print(f"Error loading HQ-SAM model: {e}")
+    print("Please check if the model file path or format is correct.")
+    raise
 # ------------------------------
 # Utility: safe I/O + overlays
 # ------------------------------
@@ -174,109 +171,111 @@ def _choose_best_mask(masks, image_gray, gc_mask):
     return masks[best_idx].astype(np.uint8)
 
 
-# --------------------------------------
-# Main function with CONSENSUS fallback
-# --------------------------------------
+#   Main functions
 def wound_segmentation(image, roi_polygon, debug=False, debug_dir=None):
     """
     image       : BGR np.ndarray (H,W,3)
     roi_polygon : list[(x,y)] absolute coordinates (same frame as 'image')
+    Returns:
+        final_mask      : uint8 mask (0/1)
+        final_contour   : contour points of wound
+        grab_cut_time
+        set_image_time
+        prediction_time
+        total_time
     """
-    assert image.ndim == 3 and image.shape[2] == 3
-    H, W = image.shape[:2]
-    t0 = time.perf_counter()  
-    last_ts = t0
+    import time
+    import cv2
+    import numpy as np
 
-    # ROI mask
+    t0 = time.perf_counter()
+    H, W = image.shape[:2]
+
+    # -----------------------------
+    # Create ROI mask
+    # -----------------------------
     roi_poly_np = np.array(roi_polygon, dtype=np.int32)
     roi_mask = np.zeros((H, W), dtype=np.uint8)
     cv2.fillPoly(roi_mask, [roi_poly_np], 1)
 
+    # -----------------------------
     # Preprocess (white balance + CLAHE)
+    # -----------------------------
     img_wb = _gray_world_white_balance(image)
     img_pp = _clahe_lab_luminance(img_wb)
 
-    # Saliency + seeds
+    # -----------------------------
+    # Saliency + seed masks
+    # -----------------------------
     sal = _wound_saliency(img_pp, roi_mask)
     sure_fg, sure_bg = _seed_masks_from_saliency(sal, roi_mask)
-    # sure_fg, sure_bg = fast_fg_bg_mask(sal, roi_mask)
 
+    # -----------------------------
+    # GrabCut (optional, now using ROI)
+    # -----------------------------
     t_before_grab_cut = time.perf_counter()
-    print(f"[TIMING] Before grab_cut: {t_before_grab_cut - t0:.3f} seconds")
+    gc_mask = roi_mask  # fallback to ROI mask
+    grab_cut_time = time.perf_counter() - t_before_grab_cut
 
-    # GrabCut
-    # gc_mask = _grabcut_refine(img_pp, roi_mask, sure_fg, sure_bg, iters=3)
-    gc_mask = roi_mask
-    t_after_grab_cut = time.perf_counter()
-    grab_cut_time = t_after_grab_cut - t_before_grab_cut
-    print(f"[TIMING] grab_cut_time: {grab_cut_time:.3f} seconds")
-
-    # SAM (box only, deterministic)
+    # -----------------------------
+    # HQ-SAM prediction
+    # -----------------------------
     t_before_set_image = time.perf_counter()
-
     predictor.set_image(img_pp)
-    
     t_after_set_image = time.perf_counter()
     set_image_time = t_after_set_image - t_before_set_image
-    print(f"[TIMING] set_image_time: {set_image_time:.3f} seconds")
-    
+
     rx, ry, rw, rh = cv2.boundingRect(roi_poly_np)
-    sam_masks, _, _ = predictor.predict(
-        point_coords=None, point_labels=None,
+    sam_masks, scores, _ = predictor.predict(
+        point_coords=None,
+        point_labels=None,
         box=np.array([rx, ry, rx+rw, ry+rh], dtype=np.float32),
         multimask_output=True
     )
     t_after_predict = time.perf_counter()
     prediction_time = t_after_predict - t_after_set_image
-    print(f"[TIMING] prediction_time: {prediction_time:.3f} seconds")
-    
+
+    # Use union of all masks
     sam_masks = [m.astype(np.uint8) for m in sam_masks]
     sam_union = np.max(np.stack(sam_masks), axis=0).astype(np.uint8)
 
-    # Best single SAM mask (optional, helps with leakage scoring)
-    gray_img  = cv2.cvtColor(img_pp, cv2.COLOR_BGR2GRAY)
-    sam_best  = _choose_best_mask(sam_masks, gray_img, gc_mask)
-
-    # -------------------------------
-    # Consensus strategies
-    # -------------------------------
-    # 1) UNION strategy (more recall)
+    # -----------------------------
+    # Consensus: UNION vs Conservative
+    # -----------------------------
     union_mask = ((sure_fg > 0) | (sam_union > 0)).astype(np.uint8) * roi_mask
-
-    # 2) CONSERVATIVE fallback = (GraphCut ∩ SAM-union)
     conservative = ((gc_mask > 0) & (sam_union > 0)).astype(np.uint8) * roi_mask
 
-    # Heuristics to detect union leakage (too big / too far from GC)
+    # Heuristics to detect leakage
     roi_area = int(roi_mask.sum())
     union_area = int(union_mask.sum())
-    gc_area = int(gc_mask.sum())
-
-    # IoU between UNION and GC
     inter = np.logical_and(union_mask>0, gc_mask>0).sum()
     u = np.logical_or(union_mask>0, gc_mask>0).sum()
     iou_union_gc = inter / (u + 1e-6)
-
-    # Conditions to switch to conservative
     leak = (union_area > 0.65 * roi_area) or (iou_union_gc < 0.45)
+
     final_mask = conservative if leak else union_mask
 
-    # Clean-up and largest component
+    # -----------------------------
+    # Clean mask: largest connected component
+    # -----------------------------
     k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5,5))
     final_mask = cv2.morphologyEx(final_mask, cv2.MORPH_OPEN, k, iterations=1)
     final_mask = cv2.morphologyEx(final_mask, cv2.MORPH_CLOSE, k, iterations=2)
+
     num_labels, labels_im, stats, _ = cv2.connectedComponentsWithStats(final_mask, connectivity=8)
     if num_labels > 1:
         best = 1 + np.argmax(stats[1:, cv2.CC_STAT_AREA])
         final_mask = (labels_im == best).astype(np.uint8)
 
-    # Final contour
+    # -----------------------------
+    # Extract final contour
+    # -----------------------------
     contours, _ = cv2.findContours(final_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     final_contour = max(contours, key=cv2.contourArea) if contours else None
-    
-    # ---------- Final timestamp ----------
-    t_end = time.perf_counter()
-    total_time = t_end - t0
-    print(f"[TIMING] total_time: {total_time:.3f} seconds")
+
+    # -----------------------------
+    # Total timing
+    # -----------------------------
+    total_time = time.perf_counter() - t0
 
     return final_mask, final_contour, grab_cut_time, set_image_time, prediction_time, total_time
-
