@@ -29,16 +29,6 @@ app = FastAPI(
     redoc_url="/redoc"
 )
 
-# # On startup: load and warm up the SAM model
-# @app.on_event("startup")
-# def on_startup():
-#     try:
-#         from sam_utils import warmup_model
-#         warmup_model()
-#         logger.info("Model loaded and warmed up on startup")
-#     except Exception as e:
-#         logger.error(f"Error during model warm-up: {e}")
-
 
 # Add CORS middleware to allow cross-origin requests
 app.add_middleware(
@@ -48,17 +38,6 @@ app.add_middleware(
     allow_methods=["*"],  # Allows all methods
     allow_headers=["*"],  # Allows all headers
 )
-
-from skimage.segmentation import random_walker
-
-def randomwalker_refine(image_bgr, sure_fg, sure_bg):
-    labels = np.zeros_like(sure_fg, dtype=np.int32)
-    labels[sure_bg>0] = 1
-    labels[sure_fg>0] = 2
-    img_gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)
-    out = random_walker(img_gray, labels, beta=90, mode='bf')
-    return (out==2).astype(np.uint8)
-
 
 # -----------------------------
 # API Endpoint 1: Contour Detection

@@ -9,24 +9,17 @@ from typing import Optional
 from contextlib import nullcontext
 
 # -------------------------------
-# 1. Load HQ-SAM model
+# 1. Load SAM model
 # -------------------------------
 device = "cuda" if torch.cuda.is_available() else "cpu"
 model_type = "vit_b"
-sam_checkpoint = "model/hqsam_finetuned_on_ec2.pth"
+sam_checkpoint = "model/hqsam_finetuned_on_ec2.pth"  # Path to SAM weights
+sam = sam_model_registry[model_type]()
+state_dict = torch.load(sam_checkpoint, map_location=device)
+sam.load_state_dict(state_dict)
+sam.to(device)
+predictor = SamPredictor(sam)
 
-try:
-    # ✅ use HQ-SAM registry correctly
-    sam = sam_model_registry[model_type](checkpoint=sam_checkpoint)
-    sam.to(device)
-    predictor = SamPredictor(sam)
-    print(f"HQ-SAM model loaded successfully on {device}")
-
-except Exception as e:
-    logging.exception("Error loading HQ-SAM model")
-    print(f"Error loading HQ-SAM model: {e}")
-    print("Please check if the model file path or format is correct.")
-    raise
 # ------------------------------
 # Utility: safe I/O + overlays
 # ------------------------------
