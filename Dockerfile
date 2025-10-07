@@ -21,9 +21,11 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy the rest of the application code
 COPY . .
 
+# Copy the PyTorch model weights
+COPY model/hqsam_finetuned_on_ec2.pth ./model/
+
 # Expose port (metadata only — Cloud Run overrides this)
 EXPOSE 8000
 
 # Start the Uvicorn server — dynamically use Cloud Run's $PORT
-# FIX: Changed to the shell form (without []) to allow $PORT substitution.
 CMD uvicorn app:app --host 0.0.0.0 --port ${PORT}
