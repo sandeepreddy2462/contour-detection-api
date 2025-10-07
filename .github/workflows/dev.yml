@@ -85,7 +85,6 @@ jobs:
           flags: |
             --allow-unauthenticated 
             --ingress=all 
-            # Removed --cpu-throttling flag as it conflicts with GPU requirements.
 
       # Step 9: Guarantee Traffic Routing to the new Revision (THE FIX)
       # This step explicitly forces 100% traffic to the LATEST ready revision, 
