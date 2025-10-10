@@ -12,7 +12,10 @@ import cv2
 import io
 from PIL import Image
 import base64
-from sam_utils import get_max_contour, predictor
+# from sam_utils import wound_segmentation
+from contour_correction import refine_contour_opencv
+# from color_utils import analyze_color
+
 from typing import List
 
 # Initialize FastAPI app
@@ -35,82 +38,50 @@ app.add_middleware(
 
 
 # -----------------------------
-# Request Models
-# -----------------------------
-class ROIbbox(BaseModel):
-    x: float
-    y: float
-    w: float
-    h: float
-
-class ImageData(BaseModel):
-    data: str
-    format: str
-    width: int
-    height: int
-
-class RequestPayload(BaseModel):
-    image: ImageData
-    roiPx: List[List[float]]   # 2D list instead of objects
-    roiBBoxPx: ROIbbox
-
-# ---------------------------
-# Response Model
-# ---------------------------
-# class ProcessResponse(BaseModel):
-#     max_contour: List[List[float]]
-
-
-# -----------------------------
 # API Endpoint
 # -----------------------------
 @app.post("/contour-detection", status_code=status.HTTP_200_OK)
-async def counter_detection(req: RequestPayload):
+async def counter_detection(    
+    imageSource: UploadFile = File(...),
+    cropBox: str = Form(...),
+    roiPoints: str = Form(...)
+    ):
     try:
         # Read the image file
-        image_data = base64.b64decode(req.image.data)
-        img = cv2.imdecode(np.frombuffer(image_data, np.uint8), cv2.IMREAD_COLOR)
 
+        file_bytes = await imageSource.read()
+        img = cv2.imdecode(np.frombuffer(file_bytes, np.uint8), cv2.IMREAD_COLOR)
         if img is None:
             raise HTTPException(status_code=400, detail="Invalid image data")
 
-        image_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-        image_height, image_width = image_rgb.shape[:2]
+        #Read ROI
+        roi_points = json.loads(roiPoints)
+        if not isinstance(roi_points, list):
+            raise HTTPException(status_code=400, detail="ROI should be a list of points")
+        
+        crop_box_dict = json.loads(cropBox)
 
-        roi_points = req.roiPx
+        # Use the new robust segmentation function
+        final_mask, contour_float, set_image_time, prediction_time, total_time = wound_segmentation(img, roi_points)
 
-        # If roiBBoxPx is provided, crop image (optional)
-        if req.roiBBoxPx:
-            x, y, bw, bh = (
-                int(req.roiBBoxPx.x),
-                int(req.roiBBoxPx.y),
-                int(req.roiBBoxPx.w),
-                int(req.roiBBoxPx.h),
-            )
-            cropped_img = image_rgb[y:y+bh, x:x+bw].copy()
-            predictor.set_image(cropped_img)
-            image_width, image_height = bw, bh
-        else:
-            predictor.set_image(image_rgb)
-            image_height, image_width = image_rgb.shape[:2]
-            x, y, bw, bh = 0, 0, image_width, image_height
-
-
-        max_contour = get_max_contour(image_width, image_height, roi_points, req.roiBBoxPx).reshape(-1,2).astype(float).tolist()
-        if max_contour is None:
+        if contour_float is None:
             raise HTTPException(status_code=400,detail="No contour Found")
+        final_contour = contour_float.reshape(-1,2).tolist()
+
+        #color analysis 
+        # color_result = analyze_color(img, final_mask)
 
         return {
             'statusCode': 200,
-            'headers': {
-                'Content-Type': 'application/json',
-                'Access-Control-Allow-Origin': '*'
-            },
             'result':{
-                "contourPx":max_contour
+                "contourPx": final_contour,
+                "cropBox" : crop_box_dict,
+                # "colorComposition": color_result,
+                "set_image_time":round(set_image_time,3),
+                "prediction_time":round(prediction_time,3),
+                "totalTime": round(total_time, 3)
             } 
         }
-            
         
     except json.JSONDecodeError as e:
         raise HTTPException(status_code=400, detail=f"Invalid JSON in roi_points: {str(e)}")
@@ -118,6 +89,45 @@ async def counter_detection(req: RequestPayload):
         raise HTTPException(status_code=500, detail=f"Error processing request: {str(e)}")
 
 
+
+#-----------------------------
+# Contour - Correction Endpoint
+#-----------------------------
+@app.post("/contour-correction", status_code=status.HTTP_200_OK)
+async def contour_correction(
+    imageSource: UploadFile = File(...),
+    detected_pts: str = Form(...),
+    adjusted_pts: str = Form(...)
+):
+    try:
+        # --- Step 1: Read the image ---
+        file_bytes = await imageSource.read()
+        img = cv2.imdecode(np.frombuffer(file_bytes, np.uint8), cv2.IMREAD_COLOR)
+        if img is None:
+            raise HTTPException(status_code=400, detail="Invalid image data")
+
+        # --- Step 2: Parse contour points ---
+        orig_pts = np.array(json.loads(detected_pts), dtype=np.int32)
+        user_pts = np.array(json.loads(adjusted_pts), dtype=np.int32)
+
+        # --- Step 3: Refine contour ---
+        from contour_correction import refine_contour_opencv  # ensure your function is imported
+        refined_contour = refine_contour_opencv(img, orig_pts, user_pts)
+
+        # Convert to list for JSON response
+        refined_list = refined_contour.tolist()
+
+        return {
+            "statusCode": 200,
+            "result": {
+                "refinedContour": refined_list
+            }
+        }
+
+    except json.JSONDecodeError as e:
+        raise HTTPException(status_code=400, detail=f"Invalid JSON in points: {str(e)}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error processing request: {str(e)}")
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)
