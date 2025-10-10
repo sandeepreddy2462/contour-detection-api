@@ -2,8 +2,8 @@ name: Build, Push, and Deploy to Cloud Run
 
 on:
   push:
-    branches: feature/hqsam-ec2-tuned
-  workflow_dispatch:
+    #branches: feature/development
+  #workflow_dispatch:
 
 env:
   PROJECT_ID: inductive-time-471009-u8
@@ -11,8 +11,6 @@ env:
   REPO_NAME: fast-care
   IMAGE_NAME: fast-care
   SERVICE_NAME: fast-care
-  # Removed IMAGE_URI definition to resolve YAML parsing error.
-  # The full image path is constructed directly in steps 6 and 8.
 
 jobs:
   build-and-deploy:
@@ -23,27 +21,41 @@ jobs:
       id-token: write # Required for Workload Identity Federation or Auth
 
     steps:
-      # Step 1: Checkout code
-      - name: Checkout repository
+      # Step 1: Checkout repository (with LFS)
+      - name: Checkout repository (with LFS)
         uses: actions/checkout@v4
+        with:
+          lfs: true        # ✅ Pull real LFS files (model weights, etc.)
+          fetch-depth: 0   # Get full history to ensure LFS integrity
 
-      # Step 2: Set up Docker Buildx
+      # Step 2: Verify model file (optional safety check)
+      - name: Verify model weight
+        run: |
+          echo "Checking model files..."
+          ls -lh model || true
+          if [ -f model/hqsam_finetuned_on_ec2.pth ]; then
+            echo "Preview of file header:"
+            head -c 64 model/hqsam_finetuned_on_ec2.pth | hexdump -C | head
+            file model/hqsam_finetuned_on_ec2.pth
+          else
+            echo "⚠️ Model file not found in 'model/' directory!"
+          fi
+
+      # Step 3: Set up Docker Buildx
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      # Step 3: Authenticate to Google Cloud
+      # Step 4: Authenticate to Google Cloud
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v2
         with:
-          # Assuming you are using Workload Identity Federation. 
-          # If not, use the key:
           credentials_json: ${{ secrets.GCP_SERVICE_ACCOUNT_KEY }}
 
-      # Step 4: Configure Docker to use Google Artifact Registry
+      # Step 5: Configure Docker for Google Artifact Registry
       - name: Configure Docker for Google Artifact Registry
         run: gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev --quiet
 
-      # Step 5: Cache Docker layers (using the existing setup)
+      # Step 6: Cache Docker layers
       - name: Cache Docker layers
         uses: actions/cache@v4
         with:
@@ -52,43 +64,38 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-buildx-
 
-      # Step 6: Build and push Docker image
+      # Step 7: Build and push Docker image
       - name: Build and push Docker image
         uses: docker/build-push-action@v6
         with:
           context: .
           push: true
-          # Note: This is where the two tags are created, resulting in multiple entries. This is okay.
           tags: |
             ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPO_NAME }}/${{ env.IMAGE_NAME }}:latest
             ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPO_NAME }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
           cache-from: type=local,src=/tmp/.buildx-cache
           cache-to: type=local,dest=/tmp/.buildx-cache-new
 
-      # Step 7: Move cache
+      # Step 8: Move cache
       - name: Move new cache
         run: |
           rm -rf /tmp/.buildx-cache
           mv /tmp/.buildx-cache-new /tmp/.buildx-cache
 
-      # Step 8: Deploy to Cloud Run (Creates the new revision)
+      # Step 9: Deploy to Cloud Run
       - name: Deploy to Cloud Run
         id: deploy
         uses: google-github-actions/deploy-cloudrun@v2
         with:
           service: ${{ env.SERVICE_NAME }}
-          # Constructed the image URI inline to avoid the top-level 'env' variable parsing issue
           image: ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPO_NAME }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
           region: ${{ env.REGION }}
           project_id: ${{ env.PROJECT_ID }}
-          # Recommended flags for robust deployment
           flags: |
             --allow-unauthenticated 
             --ingress=all 
 
-      # Step 9: Guarantee Traffic Routing to the new Revision (THE FIX)
-      # This step explicitly forces 100% traffic to the LATEST ready revision, 
-      # overriding any manual traffic splits that might have been set previously.
+      # Step 10: Route 100% traffic to the latest revision
       - name: Route 100% Traffic to Latest Revision
         run: |
           gcloud run services update-traffic ${{ env.SERVICE_NAME }} \
