@@ -1,7 +1,7 @@
 name: Build, Push, and Deploy to Cloud Run
 
-on:
-  push:
+#on:
+ # push:
     #branches: feature/development
   #workflow_dispatch:
 
