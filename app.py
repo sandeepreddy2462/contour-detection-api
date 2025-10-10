@@ -12,7 +12,7 @@ import cv2
 import io
 from PIL import Image
 import base64
-# from sam_utils import wound_segmentation
+from sam_utils import wound_segmentation
 from contour_correction import refine_contour_opencv
 # from color_utils import analyze_color
 
