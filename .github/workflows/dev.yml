@@ -1,0 +1,103 @@
+name: Build, Push, and Deploy to Cloud Run
+
+on:
+  push:
+    branches: feature/development
+  workflow_dispatch:
+
+env:
+  PROJECT_ID: inductive-time-471009-u8
+  REGION: us-east4
+  REPO_NAME: fast-care
+  IMAGE_NAME: fast-care
+  SERVICE_NAME: fast-care
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      id-token: write # Required for Workload Identity Federation or Auth
+
+    steps:
+      # Step 1: Checkout repository (with LFS)
+      - name: Checkout repository (with LFS)
+        uses: actions/checkout@v4
+        with:
+          lfs: true        # ✅ Pull real LFS files (model weights, etc.)
+          fetch-depth: 0   # Get full history to ensure LFS integrity
+
+      # Step 2: Verify model file (optional safety check)
+      - name: Verify model weight
+        run: |
+          echo "Checking model files..."
+          ls -lh model || true
+          if [ -f model/hqsam_finetuned_on_ec2.pth ]; then
+            echo "Preview of file header:"
+            head -c 64 model/hqsam_finetuned_on_ec2.pth | hexdump -C | head
+            file model/hqsam_finetuned_on_ec2.pth
+          else
+            echo "⚠️ Model file not found in 'model/' directory!"
+          fi
+
+      # Step 3: Set up Docker Buildx
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Step 4: Authenticate to Google Cloud
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SERVICE_ACCOUNT_KEY }}
+
+      # Step 5: Configure Docker for Google Artifact Registry
+      - name: Configure Docker for Google Artifact Registry
+        run: gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev --quiet
+
+      # Step 6: Cache Docker layers
+      - name: Cache Docker layers
+        uses: actions/cache@v4
+        with:
+          path: /tmp/.buildx-cache
+          key: ${{ runner.os }}-buildx-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-buildx-
+
+      # Step 7: Build and push Docker image
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPO_NAME }}/${{ env.IMAGE_NAME }}:latest
+            ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPO_NAME }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+          cache-from: type=local,src=/tmp/.buildx-cache
+          cache-to: type=local,dest=/tmp/.buildx-cache-new
+
+      # Step 8: Move cache
+      - name: Move new cache
+        run: |
+          rm -rf /tmp/.buildx-cache
+          mv /tmp/.buildx-cache-new /tmp/.buildx-cache
+
+      # Step 9: Deploy to Cloud Run
+      - name: Deploy to Cloud Run
+        id: deploy
+        uses: google-github-actions/deploy-cloudrun@v2
+        with:
+          service: ${{ env.SERVICE_NAME }}
+          image: ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPO_NAME }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+          region: ${{ env.REGION }}
+          project_id: ${{ env.PROJECT_ID }}
+          flags: |
+            --allow-unauthenticated 
+            --ingress=all 
+
+      # Step 10: Route 100% traffic to the latest revision
+      - name: Route 100% Traffic to Latest Revision
+        run: |
+          gcloud run services update-traffic ${{ env.SERVICE_NAME }} \
+            --region ${{ env.REGION }} \
+            --to-latest
