@@ -10,21 +10,14 @@ from sam_utils import wound_segmentation
 from contour_correction import refine_contour_opencv
 
 # ==============================================
-# ENV LOADING
+# CONFIG — Hardcoded
 # ==============================================
-try:
-    from dotenv import load_dotenv
-    load_dotenv()
-except ImportError:
-    print("Warning: python-dotenv not installed. Using system environment variables only.")
-
-# ==============================================
-# CONFIG
-# ==============================================
-FASTIFY_LOGIN_URL = os.getenv("FASTIFY_LOGIN_URL", "https://test.fastcare.uk/api/v1/user/login")
-FASTIFY_ORIGIN = os.getenv("FASTIFY_ORIGIN", "https://test.fastcare.uk")
+FASTIFY_LOGIN_URL = "https://test.fastcare.uk/api/v1/user/login"
+FASTIFY_FACILITY_URL = "https://test.fastcare.uk/api/v1/facility"
+FASTIFY_ORIGIN = "https://test.fastcare.uk"
 
 print(f"Fastify Login URL: {FASTIFY_LOGIN_URL}")
+print(f"Fastify Facility URL: {FASTIFY_FACILITY_URL}")
 print(f"Fastify Origin: {FASTIFY_ORIGIN}")
 
 app = FastAPI(title="FastCare GPU API", version="1.2.0")
@@ -38,21 +31,39 @@ app.add_middleware(
 )
 
 # ==============================================
-# SIMPLE SESSION VALIDATION (no /facility call)
+# SESSION VALIDATION — CALL FASTIFY
 # ==============================================
 def validate_fastcare_session(fastcare_session_cookie: str):
     """
-    Basic session check — skips calling Fastify facility API.
-    You can optionally compare it to a static session for testing.
+    Validate Fastcare session cookie by calling Fastify facility endpoint.
+    Raises HTTPException if invalid/expired.
     """
     if not fastcare_session_cookie:
         raise HTTPException(status_code=401, detail="Missing Fastcare session cookie")
-    # Otherwise, assume valid for production use
-    return True
 
+    headers = {
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+        "Origin": FASTIFY_ORIGIN,
+        "User-Agent": "FastCare-GPU-API/1.2.0"
+    }
+    cookies = {"fastcare_id": fastcare_session_cookie}
+
+    try:
+        resp = requests.get(FASTIFY_FACILITY_URL, headers=headers, cookies=cookies, timeout=5)
+        if resp.status_code == 200:
+            return True  # Valid session
+        elif resp.status_code in (401, 419):
+            raise HTTPException(status_code=401, detail="Session expired")
+        elif resp.status_code == 403:
+            raise HTTPException(status_code=403, detail="User not authorized")
+        else:
+            raise HTTPException(status_code=502, detail=f"Fastify error {resp.status_code}")
+    except requests.exceptions.RequestException:
+        raise HTTPException(status_code=502, detail="Fastify backend unreachable")
 
 # ==============================================
-# LOGIN FUNCTION — still uses Fastify login endpoint
+# LOGIN FUNCTION — GET SESSION COOKIE
 # ==============================================
 def get_fastcare_session(email: str, password: str):
     """Get session cookie from Fastify login API."""
@@ -83,7 +94,6 @@ def get_fastcare_session(email: str, password: str):
     except requests.exceptions.RequestException:
         raise HTTPException(status_code=502, detail="Fastify login endpoint unreachable")
 
-
 # ==============================================
 # HEALTH CHECK
 # ==============================================
@@ -92,10 +102,10 @@ async def health_check():
     return {
         "status": "healthy",
         "fastify_login_url": FASTIFY_LOGIN_URL,
+        "fastify_facility_url": FASTIFY_FACILITY_URL,
         "fastify_origin": FASTIFY_ORIGIN,
         "version": "1.2.0"
     }
-
 
 # ==============================================
 # LOGIN ENDPOINT
@@ -114,7 +124,6 @@ async def login_endpoint(email: str, password: str):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Login failed: {str(e)}")
 
-
 # ==============================================
 # CONTOUR DETECTION
 # ==============================================
@@ -125,7 +134,7 @@ async def contour_detection(
     roiPoints: str = Form(...),
     x_fastcare_session: str = Header(..., alias="X-Fastcare-Session"),
 ):
-    validate_fastcare_session(x_fastcare_session)
+    validate_fastcare_session(x_fastcare_session)  # ✅ real validation
 
     file_bytes = await imageSource.read()
     img = cv2.imdecode(np.frombuffer(file_bytes, np.uint8), cv2.IMREAD_COLOR)
@@ -152,7 +161,6 @@ async def contour_detection(
         },
     }
 
-
 # ==============================================
 # CONTOUR CORRECTION
 # ==============================================
@@ -163,7 +171,7 @@ async def contour_correction(
     adjusted_pts: str = Form(...),
     x_fastcare_session: str = Header(..., alias="X-Fastcare-Session"),
 ):
-    validate_fastcare_session(x_fastcare_session)
+    validate_fastcare_session(x_fastcare_session)  # ✅ real validation
 
     file_bytes = await imageSource.read()
     img = cv2.imdecode(np.frombuffer(file_bytes, np.uint8), cv2.IMREAD_COLOR)
@@ -178,7 +186,6 @@ async def contour_correction(
         "statusCode": 200,
         "result": {"refinedContour": refined_contour.tolist()},
     }
-
 
 # ==============================================
 # RUN
