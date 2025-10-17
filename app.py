@@ -47,7 +47,6 @@ def validate_fastcare_session(fastcare_session_cookie: str):
     """
     if not fastcare_session_cookie:
         raise HTTPException(status_code=401, detail="Missing Fastcare session cookie")
-
     # Otherwise, assume valid for production use
     return True
 
